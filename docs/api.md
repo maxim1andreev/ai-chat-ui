@@ -1,117 +1,105 @@
-# Chat API Contract (Qwen v2)
+# Chat API Contract (Postman)
 
-Фронтенд работает с API базой:
+API базируется на адресе:
 
-- `VITE_API_BASE_URL` (по умолчанию `/api/v2`)
+- `VITE_API_BASE_URL` (по умолчанию `http://localhost:20010`)
 
-## 1. Создать новый чат
+## 1. Получить страницу чатов
 
-`POST /api/v2/chats/new`
+`GET /chats?page=0&size=3`
 
-Тело запроса (минимум):
+Фронтенд использует `size` из `VITE_CHATS_PAGE_SIZE` (по умолчанию `20`).
 
+Поддерживаемые ответы:
+
+1. Spring Page-формат:
 ```json
 {
-  "title": "Новый чат"
+  "content": [
+    { "id": "chat_1", "name": "Test chat" }
+  ]
 }
 ```
 
-Поддерживаемые варианты ответа:
+2. Объект с `chats`:
+```json
+{ "chats": [{ "id": "chat_1", "name": "Test chat" }] }
+```
+
+3. Массив в корне:
+```json
+[{ "id": "chat_1", "name": "Test chat" }]
+```
+
+## 2. Создать чат
+
+`POST /chats`
+
+Тело:
 
 ```json
-{ "id": "chat_123", "title": "Новый чат" }
+{
+  "name": "Test chat"
+}
+```
+
+Поддерживаемые ответы:
+
+```json
+{ "id": "chat_1", "name": "Test chat" }
 ```
 
 или
 
 ```json
-{ "chat_id": "chat_123" }
+{ "chat": { "id": "chat_1", "name": "Test chat" } }
 ```
 
-или
+## 3. Получить один чат
 
-```json
-{ "chat": { "id": "chat_123", "title": "Новый чат" } }
-```
+`GET /chats/:chatId`
 
-## 2. Получить список предыдущих чатов
+Ответ может содержать:
 
-`GET /api/v2/chats`
+- `messages` или `entries`
+- поля сообщения: `content` или `message`
 
-Поддерживаемые форматы ответа:
+Пример:
 
 ```json
 {
-  "chats": [
-    {
-      "id": "chat_123",
-      "title": "Онбординг",
-      "updated_at": "2026-02-17T10:00:00.000Z",
-      "messages": [
-        { "id": "m1", "role": "assistant", "content": "Привет" },
-        { "id": "m2", "role": "user", "content": "Начнем" }
-      ]
-    }
+  "id": "chat_1",
+  "name": "Test chat",
+  "entries": [
+    { "id": "e1", "role": "user", "message": "Привет" },
+    { "id": "e2", "role": "assistant", "message": "Здравствуйте" }
   ]
 }
 ```
 
-Также поддерживается массив в корне (`[]`), `data: []` или `items: []`.
+## 4. Отправить сообщение
 
-## 3. Отправить сообщение (SSE stream)
+`POST /chats/:chatId/entries`
 
-`POST /api/v2/chat/completions?chat_id=<CHAT_ID>`
-
-Тело запроса:
+Тело:
 
 ```json
 {
-  "content": "Привет",
-  "stream": true,
-  "messages": [
-    { "role": "assistant", "content": "Привет" },
-    { "role": "user", "content": "Расскажи про Qwen" }
-  ]
+  "message": "Какая завтра будет погода в Москве?"
 }
 ```
 
-Ожидаемый тип ответа:
+Фронтенд ожидает текст ответа в одном из полей:
 
-- `Content-Type: text/event-stream`
+- `reply`
+- `answer`
+- `message`
+- `content`
+- `text`
+- `entry.answer`
+- `entry.content`
+- `entry.message`
 
-Поддерживаемые `data:` чанки стрима:
+## Системный промпт
 
-1. OpenAI/Qwen-совместимый delta
-```json
-{"choices":[{"delta":{"content":"Привет "}}]}
-```
-
-2. OpenAI/Qwen-совместимый message
-```json
-{"choices":[{"message":{"content":"Привет"}}]}
-```
-
-3. Простой формат
-```json
-{"content":"Привет"}
-```
-
-Завершение стрима:
-
-```text
-data: [DONE]
-```
-
-## Fallback без SSE
-
-Если backend вернул `application/json`, фронтенд читает один из форматов:
-
-- `{ "reply": "..." }`
-- `{ "message": "..." }`
-- `{ "message": { "content": "..." } }`
-- `{ "choices": [{ "message": { "content": "..." } }] }`
-
-## Ошибки
-
-На ошибке API должен возвращать HTTP-код `>= 400`.
-Фронтенд покажет: `Ошибка запроса: HTTP <status>`.
+Системную инструкцию (например, `Ты лаконичный ассистент.`) обычно задают на backend-слое при вызове модели, а не из браузера.

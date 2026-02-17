@@ -1,16 +1,25 @@
 import type { ChatMessage, RemoteChat, RemoteChatMessage, SendMessagePayload } from '../types/chat';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v2';
-
-type JsonLike = string | number | boolean | null | JsonLike[] | { [key: string]: JsonLike };
-type JsonObject = Record<string, JsonLike>;
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:20010';
+const CHATS_PAGE_SIZE = Number(import.meta.env.VITE_CHATS_PAGE_SIZE || 20);
 
 interface RequestOptions extends RequestInit {
   headers?: HeadersInit;
 }
 
+interface JsonPayload {
+  [key: string]: unknown;
+}
+
 function buildUrl(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+function resolveMessageContent(message: RemoteChatMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  if (typeof message.message === 'string') return message.message;
+  if (typeof message.text === 'string') return message.text;
+  return '';
 }
 
 async function fetchJson(url: string, options: RequestOptions = {}): Promise<unknown> {
@@ -31,51 +40,60 @@ async function fetchJson(url: string, options: RequestOptions = {}): Promise<unk
 }
 
 function toMessage(message: RemoteChatMessage): ChatMessage {
+  const role = message.role || (message.type === 'question' ? 'user' : 'assistant');
+
   return {
     id: message.id || crypto.randomUUID(),
-    role: message.role,
-    content: message.content || '',
+    role,
+    content: resolveMessageContent(message),
   };
 }
 
-function toChat(chat: RemoteChat): RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number } {
+function toChat(chat: Partial<RemoteChat>): RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number } {
+  const rawMessages =
+    (Array.isArray(chat.messages) && chat.messages) ||
+    (Array.isArray(chat.entries) && chat.entries) ||
+    [];
+
   return {
     id: chat.id || crypto.randomUUID(),
-    title: chat.title || 'Новый чат',
-    messages: Array.isArray(chat.messages) ? chat.messages.map(toMessage) : [],
+    title: chat.title || chat.name || 'Новый чат',
+    messages: rawMessages.map(toMessage),
     updatedAt: chat.updated_at ? new Date(chat.updated_at).getTime() : Date.now(),
   };
 }
 
-function extractChatsArray(payload: unknown): RemoteChat[] {
-  if (Array.isArray(payload)) return payload as RemoteChat[];
+function extractChats(payload: unknown): Partial<RemoteChat>[] {
+  if (Array.isArray(payload)) return payload as Partial<RemoteChat>[];
   if (!payload || typeof payload !== 'object') return [];
 
   const data = payload as {
     chats?: unknown;
     data?: unknown;
     items?: unknown;
+    content?: unknown;
   };
 
-  if (Array.isArray(data.chats)) return data.chats as RemoteChat[];
-  if (Array.isArray(data.data)) return data.data as RemoteChat[];
-  if (Array.isArray(data.items)) return data.items as RemoteChat[];
+  if (Array.isArray(data.chats)) return data.chats as Partial<RemoteChat>[];
+  if (Array.isArray(data.data)) return data.data as Partial<RemoteChat>[];
+  if (Array.isArray(data.items)) return data.items as Partial<RemoteChat>[];
+  if (Array.isArray(data.content)) return data.content as Partial<RemoteChat>[];
+
   return [];
 }
 
-function extractCreatedChat(payload: unknown): RemoteChat {
+function extractCreatedChat(payload: unknown): Partial<RemoteChat> {
   if (!payload || typeof payload !== 'object') {
     return { id: crypto.randomUUID(), title: 'Новый чат', messages: [] };
   }
 
   const data = payload as {
-    chat?: RemoteChat;
-    data?: RemoteChat;
+    chat?: Partial<RemoteChat>;
+    data?: Partial<RemoteChat>;
     id?: string;
     chat_id?: string;
     title?: string;
-    messages?: RemoteChatMessage[];
-    updated_at?: string;
+    name?: string;
   };
 
   if (data.chat && typeof data.chat === 'object') return data.chat;
@@ -84,88 +102,8 @@ function extractCreatedChat(payload: unknown): RemoteChat {
   return {
     id: data.id || data.chat_id || crypto.randomUUID(),
     title: data.title,
-    messages: data.messages,
-    updated_at: data.updated_at,
+    name: data.name,
   };
-}
-
-function extractStreamDelta(payload: string): string {
-  if (!payload || payload === '[DONE]') return '';
-
-  try {
-    const parsed = JSON.parse(payload) as {
-      choices?: Array<{
-        delta?: { content?: unknown };
-        message?: { content?: unknown };
-      }>;
-      message?: { content?: unknown } | unknown;
-      content?: unknown;
-      text?: unknown;
-    };
-
-    const deltaContent = parsed.choices?.[0]?.delta?.content;
-    if (typeof deltaContent === 'string') return deltaContent;
-
-    const messageContent = parsed.choices?.[0]?.message?.content;
-    if (typeof messageContent === 'string') return messageContent;
-
-    if (parsed.message && typeof parsed.message === 'object') {
-      const content = (parsed.message as { content?: unknown }).content;
-      if (typeof content === 'string') return content;
-    }
-
-    if (typeof parsed.content === 'string') return parsed.content;
-    if (typeof parsed.text === 'string') return parsed.text;
-    return '';
-  } catch {
-    return payload;
-  }
-}
-
-async function readSseAssistantText(response: Response): Promise<string> {
-  if (!response.body) {
-    throw new Error('Пустой stream-ответ от сервера.');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let result = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf('\n\n');
-
-    while (boundary !== -1) {
-      const eventBlock = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-
-      const dataLines = eventBlock
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim());
-
-      dataLines.forEach((line) => {
-        result += extractStreamDelta(line);
-      });
-
-      boundary = buffer.indexOf('\n\n');
-    }
-  }
-
-  buffer += decoder.decode();
-  const rest = buffer
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trim());
-  rest.forEach((line) => {
-    result += extractStreamDelta(line);
-  });
-
-  return result.trim();
 }
 
 function extractAssistantText(payload: unknown): string {
@@ -175,21 +113,26 @@ function extractAssistantText(payload: unknown): string {
 
   const data = payload as {
     reply?: unknown;
+    answer?: unknown;
     message?: unknown;
+    content?: unknown;
+    text?: unknown;
+    entry?: { answer?: unknown; content?: unknown; message?: unknown };
     choices?: Array<{ message?: { content?: unknown } }>;
   };
 
   if (typeof data.reply === 'string') return data.reply;
+  if (typeof data.answer === 'string') return data.answer;
   if (typeof data.message === 'string') return data.message;
-  if (
-    data.message &&
-    typeof data.message === 'object' &&
-    typeof (data.message as { content?: unknown }).content === 'string'
-  ) {
-    return (data.message as { content: string }).content;
+  if (typeof data.content === 'string') return data.content;
+  if (typeof data.text === 'string') return data.text;
+
+  if (data.entry && typeof data.entry === 'object') {
+    if (typeof data.entry.answer === 'string') return data.entry.answer;
+    if (typeof data.entry.content === 'string') return data.entry.content;
+    if (typeof data.entry.message === 'string') return data.entry.message;
   }
 
-  // Qwen/OpenAI-compatible shape: { choices: [{ message: { role, content } }] }
   const choiceMessage = data.choices?.[0]?.message?.content;
   if (typeof choiceMessage === 'string') return choiceMessage;
 
@@ -197,52 +140,36 @@ function extractAssistantText(payload: unknown): string {
 }
 
 export async function listChatsRequest(): Promise<Array<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }>> {
-  const data = await fetchJson(buildUrl('/chats'), { method: 'GET' });
-  const rawChats = extractChatsArray(data);
-  if (!Array.isArray(rawChats)) return [];
-  return rawChats.map((chat) => toChat(chat as RemoteChat));
+  const data = await fetchJson(buildUrl(`/chats?page=0&size=${CHATS_PAGE_SIZE}`), { method: 'GET' });
+  return extractChats(data).map(toChat);
 }
 
-export async function createChatRequest(payload: JsonObject = {}): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
-  const data = await fetchJson(buildUrl('/chats/new'), {
+export async function getChatRequest(chatId: string): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
+  const data = await fetchJson(buildUrl(`/chats/${encodeURIComponent(chatId)}`), { method: 'GET' });
+
+  if (data && typeof data === 'object' && 'chat' in data) {
+    return toChat((data as { chat: Partial<RemoteChat> }).chat);
+  }
+
+  return toChat(data as Partial<RemoteChat>);
+}
+
+export async function createChatRequest(payload: JsonPayload = {}): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
+  const data = await fetchJson(buildUrl('/chats'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   return toChat(extractCreatedChat(data));
 }
 
-export async function sendMessageRequest({ chatId, content, messages }: SendMessagePayload): Promise<string> {
-  const response = await fetch(`${buildUrl('/chat/completions')}?chat_id=${encodeURIComponent(chatId)}`, {
+export async function sendMessageRequest({ chatId, content }: SendMessagePayload): Promise<string> {
+  const data = await fetchJson(buildUrl(`/chats/${encodeURIComponent(chatId)}/entries`), {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream, application/json',
-    },
     body: JSON.stringify({
-      content,
-      messages: messages.map(({ role, content: messageContent }) => ({
-        role,
-        content: messageContent,
-      })),
-      stream: true,
+      message: content,
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-
-  if (contentType.includes('text/event-stream')) {
-    const streamed = await readSseAssistantText(response);
-    if (!streamed) {
-      throw new Error('Пустой stream-ответ от сервера.');
-    }
-    return streamed;
-  }
-
-  const data = await response.json();
   const assistantText = extractAssistantText(data);
   if (!assistantText) {
     throw new Error('Пустой ответ от сервера.');

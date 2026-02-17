@@ -1,5 +1,6 @@
 import {
   createChatRequest,
+  getChatRequest,
   listChatsRequest,
   sendMessageRequest,
 } from './api/chatApi';
@@ -91,7 +92,13 @@ export async function listChats(): Promise<ChatState[]> {
 
 export async function createChat(): Promise<ChatState> {
   if (USE_MOCK_CHAT) return createLocalChat();
-  const remoteChat = await createChatRequest({ title: DEFAULT_CHAT_TITLE });
+  const remoteChat = await createChatRequest({ name: DEFAULT_CHAT_TITLE });
+  return toChatState(remoteChat);
+}
+
+export async function getChat(chatId: string): Promise<ChatState> {
+  if (USE_MOCK_CHAT) return createLocalChat();
+  const remoteChat = await getChatRequest(chatId);
   return toChatState(remoteChat);
 }
 

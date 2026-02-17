@@ -24,19 +24,19 @@ npm run preview
 
 Там описаны запросы:
 
-- `GET /api/chats` (список чатов)
-- `POST /api/chats` (создание чата)
-- `POST /api/chats/:chatId/messages` (отправка сообщения)
-
-Для ответа сообщения поддерживается и Qwen/OpenAI-compatible формат `choices[0].message.content`.
+- `GET /chats?page=0&size=...` (список чатов)
+- `POST /chats` (создание чата)
+- `GET /chats/:chatId` (получение истории чата)
+- `POST /chats/:chatId/entries` (отправка сообщения)
 
 ## Переменные окружения
 
 Скопируй `.env.example` в `.env` при необходимости:
 
 ```bash
-VITE_API_BASE_URL=/api
-VITE_USE_MOCK_CHAT=true
+VITE_API_BASE_URL=http://localhost:20010
+VITE_CHATS_PAGE_SIZE=20
+VITE_USE_MOCK_CHAT=false
 ```
 
 `VITE_USE_MOCK_CHAT=true` включает мок-ответы без реального backend API.

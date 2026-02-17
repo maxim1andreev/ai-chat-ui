@@ -7,6 +7,7 @@ import {
   createLocalChat,
   createMessage,
   DEFAULT_CHAT_TITLE,
+  getChat,
   listChats,
   requestAssistantReply,
 } from './chatService';
@@ -63,6 +64,34 @@ export default function App() {
   useEffect(() => {
     if (activeChatId || chats.length === 0) return;
     setActiveChatId(chats[0].id);
+  }, [activeChatId, chats]);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    const chat = chats.find((item) => item.id === activeChatId);
+    if (!chat || chat.messages.length > 0 || chat.isSending) return;
+
+    let cancelled = false;
+
+    async function loadChatDetails() {
+      try {
+        const fullChat = await getChat(activeChatId);
+        if (cancelled) return;
+        setChats((prev) => promoteUpdatedChat(prev, activeChatId, (current) => ({
+          ...current,
+          messages: fullChat.messages,
+          updatedAt: fullChat.updatedAt || current.updatedAt,
+        })));
+      } catch {
+        // Keep chat list item visible even if detail loading failed.
+      }
+    }
+
+    loadChatDetails();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeChatId, chats]);
 
   useEffect(() => {
