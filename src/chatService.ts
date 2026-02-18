@@ -104,13 +104,11 @@ export async function getChat(chatId: string): Promise<ChatState> {
 
 interface RequestAssistantReplyParams {
   chatId: string;
-  messages: ChatMessage[];
   text: string;
 }
 
 export async function requestAssistantReply({
   chatId,
-  messages,
   text,
 }: RequestAssistantReplyParams): Promise<string> {
   if (USE_MOCK_CHAT) {
@@ -121,6 +119,5 @@ export async function requestAssistantReply({
   return sendMessageRequest({
     chatId,
     content: text,
-    messages,
   });
 }

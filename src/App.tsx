@@ -168,7 +168,6 @@ export default function App() {
     try {
       const aiReply = await requestAssistantReply({
         chatId,
-        messages: nextMessages,
         text,
       });
       setChats((prev) =>

@@ -1,4 +1,9 @@
-import type { ChatMessage, RemoteChat, RemoteChatMessage, SendMessagePayload } from '../types/chat';
+import type {
+  ChatMessage,
+  RemoteChat,
+  RemoteChatEntry,
+  SendMessagePayload,
+} from '../types/chat';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:20010';
 const CHATS_PAGE_SIZE = Number(import.meta.env.VITE_CHATS_PAGE_SIZE || 20);
@@ -7,19 +12,12 @@ interface RequestOptions extends RequestInit {
   headers?: HeadersInit;
 }
 
-interface JsonPayload {
-  [key: string]: unknown;
+interface ListChatsResponse {
+  content: RemoteChat[];
 }
 
 function buildUrl(path: string): string {
   return `${API_BASE}${path}`;
-}
-
-function resolveMessageContent(message: RemoteChatMessage): string {
-  if (typeof message.content === 'string') return message.content;
-  if (typeof message.message === 'string') return message.message;
-  if (typeof message.text === 'string') return message.text;
-  return '';
 }
 
 async function fetchJson(url: string, options: RequestOptions = {}): Promise<unknown> {
@@ -39,135 +37,73 @@ async function fetchJson(url: string, options: RequestOptions = {}): Promise<unk
   return response.json();
 }
 
-function toMessage(message: RemoteChatMessage): ChatMessage {
-  const role = message.role || (message.type === 'question' ? 'user' : 'assistant');
-
+function entryToMessage(entry: RemoteChatEntry): ChatMessage {
   return {
-    id: message.id || crypto.randomUUID(),
-    role,
-    content: resolveMessageContent(message),
+    id: entry.id || crypto.randomUUID(),
+    role: entry.type === 'question' ? 'user' : 'assistant',
+    content: entry.message || '',
   };
 }
 
-function toChat(chat: Partial<RemoteChat>): RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number } {
-  const rawMessages =
-    (Array.isArray(chat.messages) && chat.messages) ||
-    (Array.isArray(chat.entries) && chat.entries) ||
-    [];
-
+function toChat(chat: RemoteChat): RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number } {
   return {
-    id: chat.id || crypto.randomUUID(),
-    title: chat.title || chat.name || 'Новый чат',
-    messages: rawMessages.map(toMessage),
-    updatedAt: chat.updated_at ? new Date(chat.updated_at).getTime() : Date.now(),
-  };
-}
-
-function extractChats(payload: unknown): Partial<RemoteChat>[] {
-  if (Array.isArray(payload)) return payload as Partial<RemoteChat>[];
-  if (!payload || typeof payload !== 'object') return [];
-
-  const data = payload as {
-    chats?: unknown;
-    data?: unknown;
-    items?: unknown;
-    content?: unknown;
-  };
-
-  if (Array.isArray(data.chats)) return data.chats as Partial<RemoteChat>[];
-  if (Array.isArray(data.data)) return data.data as Partial<RemoteChat>[];
-  if (Array.isArray(data.items)) return data.items as Partial<RemoteChat>[];
-  if (Array.isArray(data.content)) return data.content as Partial<RemoteChat>[];
-
-  return [];
-}
-
-function extractCreatedChat(payload: unknown): Partial<RemoteChat> {
-  if (!payload || typeof payload !== 'object') {
-    return { id: crypto.randomUUID(), title: 'Новый чат', messages: [] };
-  }
-
-  const data = payload as {
-    chat?: Partial<RemoteChat>;
-    data?: Partial<RemoteChat>;
-    id?: string;
-    chat_id?: string;
-    title?: string;
-    name?: string;
-  };
-
-  if (data.chat && typeof data.chat === 'object') return data.chat;
-  if (data.data && typeof data.data === 'object') return data.data;
-
-  return {
-    id: data.id || data.chat_id || crypto.randomUUID(),
-    title: data.title,
-    name: data.name,
+    id: chat.id,
+    name: chat.name,
+    title: chat.name || 'Новый чат',
+    messages: Array.isArray(chat.entries) ? chat.entries.map(entryToMessage) : [],
+    updatedAt: chat.updatedAt || Date.now(),
   };
 }
 
 function extractAssistantText(payload: unknown): string {
-  if (!payload) return '';
   if (typeof payload === 'string') return payload;
-  if (typeof payload !== 'object') return '';
+  if (!payload || typeof payload !== 'object') return '';
 
   const data = payload as {
-    reply?: unknown;
-    answer?: unknown;
     message?: unknown;
-    content?: unknown;
-    text?: unknown;
-    entry?: { answer?: unknown; content?: unknown; message?: unknown };
-    choices?: Array<{ message?: { content?: unknown } }>;
+    answer?: unknown;
+    entry?: { message?: unknown };
   };
 
-  if (typeof data.reply === 'string') return data.reply;
   if (typeof data.answer === 'string') return data.answer;
   if (typeof data.message === 'string') return data.message;
-  if (typeof data.content === 'string') return data.content;
-  if (typeof data.text === 'string') return data.text;
-
-  if (data.entry && typeof data.entry === 'object') {
-    if (typeof data.entry.answer === 'string') return data.entry.answer;
-    if (typeof data.entry.content === 'string') return data.entry.content;
-    if (typeof data.entry.message === 'string') return data.entry.message;
-  }
-
-  const choiceMessage = data.choices?.[0]?.message?.content;
-  if (typeof choiceMessage === 'string') return choiceMessage;
+  if (data.entry && typeof data.entry.message === 'string') return data.entry.message;
 
   return '';
 }
 
 export async function listChatsRequest(): Promise<Array<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }>> {
-  const data = await fetchJson(buildUrl(`/chats?page=0&size=${CHATS_PAGE_SIZE}`), { method: 'GET' });
-  return extractChats(data).map(toChat);
+  const data = (await fetchJson(
+    buildUrl(`/chats?page=0&size=${CHATS_PAGE_SIZE}`),
+    { method: 'GET' },
+  )) as ListChatsResponse;
+
+  const chats = Array.isArray(data?.content) ? data.content : [];
+  return chats.map(toChat);
 }
 
 export async function getChatRequest(chatId: string): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
-  const data = await fetchJson(buildUrl(`/chats/${encodeURIComponent(chatId)}`), { method: 'GET' });
+  const data = (await fetchJson(
+    buildUrl(`/chats/${encodeURIComponent(chatId)}`),
+    { method: 'GET' },
+  )) as RemoteChat;
 
-  if (data && typeof data === 'object' && 'chat' in data) {
-    return toChat((data as { chat: Partial<RemoteChat> }).chat);
-  }
-
-  return toChat(data as Partial<RemoteChat>);
+  return toChat(data);
 }
 
-export async function createChatRequest(payload: JsonPayload = {}): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
-  const data = await fetchJson(buildUrl('/chats'), {
+export async function createChatRequest(payload: { name: string }): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
+  const data = (await fetchJson(buildUrl('/chats'), {
     method: 'POST',
     body: JSON.stringify(payload),
-  });
-  return toChat(extractCreatedChat(data));
+  })) as RemoteChat;
+
+  return toChat(data);
 }
 
 export async function sendMessageRequest({ chatId, content }: SendMessagePayload): Promise<string> {
   const data = await fetchJson(buildUrl(`/chats/${encodeURIComponent(chatId)}/entries`), {
     method: 'POST',
-    body: JSON.stringify({
-      message: content,
-    }),
+    body: JSON.stringify({ message: content }),
   });
 
   const assistantText = extractAssistantText(data);
