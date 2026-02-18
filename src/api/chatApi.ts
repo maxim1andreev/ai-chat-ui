@@ -1,7 +1,10 @@
 import type {
-  ChatMessage,
-  RemoteChat,
-  RemoteChatEntry,
+  ApiChatDto,
+  ApiChatEntryDto,
+  ApiChatsPageDto,
+  ApiCreateChatRequest,
+  ApiSendMessageResponse,
+  NormalizedChat,
   SendMessagePayload,
 } from '../types/chat';
 
@@ -10,10 +13,6 @@ const CHATS_PAGE_SIZE = Number(import.meta.env.VITE_CHATS_PAGE_SIZE || 20);
 
 interface RequestOptions extends RequestInit {
   headers?: HeadersInit;
-}
-
-interface ListChatsResponse {
-  content: RemoteChat[];
 }
 
 function buildUrl(path: string): string {
@@ -37,65 +36,49 @@ async function fetchJson(url: string, options: RequestOptions = {}): Promise<unk
   return response.json();
 }
 
-function entryToMessage(entry: RemoteChatEntry): ChatMessage {
+function entryToMessage(entry: ApiChatEntryDto) {
   return {
-    id: entry.id || crypto.randomUUID(),
-    role: entry.type === 'question' ? 'user' : 'assistant',
-    content: entry.message || '',
+    id: entry.uid,
+    role: entry.entryType === 'USER' ? 'user' : 'assistant',
+    content: entry.message,
   };
 }
 
-function toChat(chat: RemoteChat): RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number } {
+function toChat(chat: ApiChatDto): NormalizedChat {
+  const hasEntries = Array.isArray(chat.entries);
   return {
-    id: chat.id,
-    name: chat.name,
+    id: chat.uid,
     title: chat.name || 'Новый чат',
-    messages: Array.isArray(chat.entries) ? chat.entries.map(entryToMessage) : [],
-    updatedAt: chat.updatedAt || Date.now(),
+    messages: hasEntries ? chat.entries.map(entryToMessage) : [],
+    isEntriesLoaded: hasEntries,
+    updatedAt: chat.createdAt ? new Date(chat.createdAt).getTime() : Date.now(),
   };
 }
 
-function extractAssistantText(payload: unknown): string {
-  if (typeof payload === 'string') return payload;
-  if (!payload || typeof payload !== 'object') return '';
-
-  const data = payload as {
-    message?: unknown;
-    answer?: unknown;
-    entry?: { message?: unknown };
-  };
-
-  if (typeof data.answer === 'string') return data.answer;
-  if (typeof data.message === 'string') return data.message;
-  if (data.entry && typeof data.entry.message === 'string') return data.entry.message;
-
-  return '';
-}
-
-export async function listChatsRequest(): Promise<Array<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }>> {
+export async function listChatsRequest(): Promise<NormalizedChat[]> {
   const data = (await fetchJson(
     buildUrl(`/chats?page=0&size=${CHATS_PAGE_SIZE}`),
     { method: 'GET' },
-  )) as ListChatsResponse;
+  )) as ApiChatsPageDto;
 
-  const chats = Array.isArray(data?.content) ? data.content : [];
+  const chats = Array.isArray(data?.chats) ? data.chats : [];
   return chats.map(toChat);
 }
 
-export async function getChatRequest(chatId: string): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
+export async function getChatRequest(chatId: string): Promise<NormalizedChat> {
   const data = (await fetchJson(
     buildUrl(`/chats/${encodeURIComponent(chatId)}`),
     { method: 'GET' },
-  )) as RemoteChat;
+  )) as ApiChatDto;
 
   return toChat(data);
 }
 
-export async function createChatRequest(payload: { name: string }): Promise<RemoteChat & { title: string; messages: ChatMessage[]; updatedAt: number }> {
+export async function createChatRequest(payload: ApiCreateChatRequest): Promise<NormalizedChat> {
   const data = (await fetchJson(buildUrl('/chats'), {
     method: 'POST',
     body: JSON.stringify(payload),
-  })) as RemoteChat;
+  })) as ApiChatDto;
 
   return toChat(data);
 }
@@ -104,12 +87,13 @@ export async function sendMessageRequest({ chatId, content }: SendMessagePayload
   const data = await fetchJson(buildUrl(`/chats/${encodeURIComponent(chatId)}/entries`), {
     method: 'POST',
     body: JSON.stringify({ message: content }),
-  });
+  }) as ApiSendMessageResponse;
 
-  const assistantText = extractAssistantText(data);
-  if (!assistantText) {
-    throw new Error('Пустой ответ от сервера.');
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  const assistantEntry = [...entries].reverse().find((entry) => entry.entryType === 'ASSISTANT');
+  if (!assistantEntry?.message) {
+    throw new Error('В ответе нет сообщения ассистента.');
   }
 
-  return assistantText;
+  return assistantEntry.message;
 }

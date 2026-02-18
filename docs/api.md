@@ -1,29 +1,30 @@
-# Chat API Contract (Strict Postman)
+# Chat API Contract (Exact DTO)
 
 База API:
 
 - `VITE_API_BASE_URL` (по умолчанию `http://localhost:20010`)
 
-## 1. Get chats page
+## 1. GET `/chats?page=0&size=3`
 
-`GET /chats?page=0&size=3`
-
-Фронтенд ожидает формат:
+Ответ:
 
 ```json
 {
-  "content": [
+  "page": 0,
+  "size": 3,
+  "totalPages": 1,
+  "totalElements": 1,
+  "chats": [
     {
-      "id": "f618e003-ff5f-4a7f-a902-d44b7b4affb6",
-      "name": "Test chat"
+      "uid": "fc90e8e5-fc40-46f8-80a4-197217b39d99",
+      "name": "Test chat",
+      "createdAt": "2026-02-17T06:32:29.859587Z"
     }
   ]
 }
 ```
 
-## 2. Create chat
-
-`POST /chats`
+## 2. POST `/chats`
 
 Тело:
 
@@ -37,44 +38,40 @@
 
 ```json
 {
-  "id": "f618e003-ff5f-4a7f-a902-d44b7b4affb6",
-  "name": "Test chat"
+  "uid": "1af54961-0f22-447e-84c4-b18e16371d7a",
+  "name": "Test chat",
+  "createdAt": "2026-02-17T12:36:35.718603300Z",
+  "entries": []
 }
 ```
 
-## 3. Get chat
-
-`GET /chats/:chatId`
+## 3. GET `/chats/{chatUid}`
 
 Ответ:
 
 ```json
 {
-  "id": "f618e003-ff5f-4a7f-a902-d44b7b4affb6",
+  "uid": "f618e003-ff5f-4a7f-a902-d44b7b4affb6",
   "name": "Test chat",
+  "createdAt": "2026-02-17T12:31:09.491691Z",
   "entries": [
     {
-      "id": "entry_1",
-      "type": "question",
-      "message": "Привет"
+      "uid": "f0018dab-0d8b-4e93-9c1c-2e4241dcdcb1",
+      "createdAt": "2026-02-17T12:31:17.464966Z",
+      "entryType": "USER",
+      "message": "Какая завтра будет погода в Москве?"
     },
     {
-      "id": "entry_2",
-      "type": "answer",
-      "message": "Здравствуйте"
+      "uid": "672aa4cd-b0f9-4007-a897-062b1c9469a6",
+      "createdAt": "2026-02-17T12:32:32.188931Z",
+      "entryType": "ASSISTANT",
+      "message": "Завтра в Москве ожидается туман..."
     }
   ]
 }
 ```
 
-Маппинг во фронте:
-
-- `type: "question"` -> роль `user`
-- `type: "answer"` -> роль `assistant`
-
-## 4. Send message
-
-`POST /chats/:chatId/entries`
+## 4. POST `/chats/{chatUid}/entries`
 
 Тело:
 
@@ -84,28 +81,10 @@
 }
 ```
 
-Ответ (один из ожидаемых):
+Ответ: тот же DTO, что у `GET /chats/{chatUid}`, но с добавленными новыми `entries`.
 
-```json
-{
-  "message": "Завтра в Москве ..."
-}
-```
+Поведение фронта:
 
-или
-
-```json
-{
-  "answer": "Завтра в Москве ..."
-}
-```
-
-или
-
-```json
-{
-  "entry": {
-    "message": "Завтра в Москве ..."
-  }
-}
-```
+- `entryType: "USER"` -> `role: "user"`
+- `entryType: "ASSISTANT"` -> `role: "assistant"`
+- после отправки фронт берет последнее `ASSISTANT` сообщение из `entries`

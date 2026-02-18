@@ -4,7 +4,7 @@ import {
   listChatsRequest,
   sendMessageRequest,
 } from './api/chatApi';
-import type { ChatMessage, ChatRole, ChatState, RemoteChat } from './types/chat';
+import type { ChatMessage, ChatRole, ChatState, NormalizedChat } from './types/chat';
 
 const MOCK_DELAY_MS = 700;
 const DEFAULT_CHAT_TITLE = 'Новый чат';
@@ -32,13 +32,12 @@ export function createMessage(role: ChatRole, content: string): ChatMessage {
   };
 }
 
-function toChatState(chat: RemoteChat & { title?: string; messages?: ChatMessage[] }): ChatState {
+function toChatState(chat: NormalizedChat): ChatState {
   return {
-    id: chat.id || crypto.randomUUID(),
-    title: chat.title || DEFAULT_CHAT_TITLE,
-    messages: Array.isArray(chat.messages)
-      ? chat.messages.map((message) => createMessage(message.role, message.content))
-      : [createMessage('assistant', 'Привет! Я готов помочь. Задай вопрос.')],
+    id: chat.id,
+    title: chat.title,
+    messages: chat.messages.map((message) => createMessage(message.role, message.content)),
+    isEntriesLoaded: chat.isEntriesLoaded,
     isSending: false,
     error: '',
     updatedAt: chat.updatedAt || Date.now(),
@@ -51,12 +50,15 @@ export function createLocalChat(): ChatState {
     title: DEFAULT_CHAT_TITLE,
     messages: [
       {
+        id: crypto.randomUUID(),
         role: 'assistant',
         content: USE_MOCK_CHAT
           ? 'Привет! Включен мок-режим. Напиши сообщение для теста общения.'
           : 'Привет! Я готов помочь. Задай вопрос.',
       },
     ],
+    isEntriesLoaded: true,
+    updatedAt: Date.now(),
   });
 }
 

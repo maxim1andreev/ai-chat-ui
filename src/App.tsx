@@ -4,7 +4,6 @@ import { MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined, UserOutline
 import { Alert, Avatar, Button, Card, Flex, Input, Space, Spin, Typography } from 'antd';
 import {
   createChat,
-  createLocalChat,
   createMessage,
   DEFAULT_CHAT_TITLE,
   getChat,
@@ -49,6 +48,7 @@ export default function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [isCreatingChat, setIsCreatingChat] = useState(false);
+  const [initError, setInitError] = useState('');
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const messages = activeChat?.messages ?? [];
   const isSending = Boolean(activeChat?.isSending);
@@ -69,7 +69,7 @@ export default function App() {
   useEffect(() => {
     if (!activeChatId) return;
     const chat = chats.find((item) => item.id === activeChatId);
-    if (!chat || chat.messages.length > 0 || chat.isSending) return;
+    if (!chat || chat.isEntriesLoaded || chat.isSending) return;
 
     let cancelled = false;
 
@@ -80,6 +80,7 @@ export default function App() {
         setChats((prev) => promoteUpdatedChat(prev, activeChatId, (current) => ({
           ...current,
           messages: fullChat.messages,
+          isEntriesLoaded: true,
           updatedAt: fullChat.updatedAt || current.updatedAt,
         })));
       } catch {
@@ -101,6 +102,7 @@ export default function App() {
       try {
         const loadedChats = await listChats();
         if (cancelled) return;
+        setInitError('');
 
         if (loadedChats.length > 0) {
           setChats(loadedChats);
@@ -111,9 +113,11 @@ export default function App() {
         if (!cancelled) {
           setChats([initialChat]);
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setChats([createLocalChat()]);
+          const message = error instanceof Error ? error.message : 'Не удалось загрузить чаты';
+          setInitError(`Ошибка инициализации: ${message}`);
+          setChats([]);
         }
       }
     }
@@ -134,11 +138,10 @@ export default function App() {
       setChats((prev) => [newChat, ...prev]);
       setActiveChatId(newChat.id);
       setInput('');
-    } catch {
-      const fallbackChat = createLocalChat();
-      setChats((prev) => [fallbackChat, ...prev]);
-      setActiveChatId(fallbackChat.id);
-      setInput('');
+      setInitError('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось создать чат';
+      setInitError(`Ошибка создания чата: ${message}`);
     } finally {
       setIsCreatingChat(false);
     }
@@ -157,6 +160,7 @@ export default function App() {
       promoteUpdatedChat(prev, chatId, (chat) => ({
         ...chat,
         messages: nextMessages,
+        isEntriesLoaded: true,
         title: chat.title === DEFAULT_CHAT_TITLE ? formatChatTitle(text) : chat.title,
         isSending: true,
         error: '',
@@ -235,6 +239,8 @@ export default function App() {
             <Title level={3}>AI Chat</Title>
             <Text type="secondary">{activeChat?.title || 'Диалог'}</Text>
           </header>
+
+          {initError && <Alert type="error" showIcon message={initError} />}
 
           <div className="chat-messages" aria-live="polite" ref={messagesRef}>
             {messages.map((message) => {
