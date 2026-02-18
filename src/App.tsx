@@ -16,6 +16,15 @@ import './App.css';
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
 
+function sortChats(chats: ChatState[]): ChatState[] {
+  return [...chats].sort((a, b) => {
+    if (a.updatedAt !== b.updatedAt) {
+      return b.updatedAt - a.updatedAt;
+    }
+    return a.title.localeCompare(b.title, 'ru');
+  });
+}
+
 function promoteUpdatedChat(
   chats: ChatState[],
   chatId: string,
@@ -24,7 +33,7 @@ function promoteUpdatedChat(
   const target = chats.find((chat) => chat.id === chatId);
   if (!target) return chats;
   const updated = updater(target);
-  return [updated, ...chats.filter((chat) => chat.id !== chatId)];
+  return sortChats([updated, ...chats.filter((chat) => chat.id !== chatId)]);
 }
 
 function formatChatTitle(text: string): string {
@@ -105,13 +114,13 @@ export default function App() {
         setInitError('');
 
         if (loadedChats.length > 0) {
-          setChats(loadedChats);
+          setChats(sortChats(loadedChats));
           return;
         }
 
         const initialChat = await createChat();
         if (!cancelled) {
-          setChats([initialChat]);
+          setChats(sortChats([initialChat]));
         }
       } catch (error) {
         if (!cancelled) {
@@ -135,7 +144,7 @@ export default function App() {
 
     try {
       const newChat = await createChat();
-      setChats((prev) => [newChat, ...prev]);
+      setChats((prev) => sortChats([newChat, ...prev]));
       setActiveChatId(newChat.id);
       setInput('');
       setInitError('');
