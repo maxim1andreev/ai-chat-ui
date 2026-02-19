@@ -135,6 +135,47 @@ app.post('/chats/:chatUid/entries', async (req, res) => {
   res.json(chat);
 });
 
+app.post('/chats/:chatUid/entries/stream', async (req, res) => {
+  const chat = chats.find((item) => item.uid === req.params.chatUid);
+  if (!chat) {
+    res.status(404).json({ message: 'Chat not found' });
+    return;
+  }
+
+  const userMessage =
+    typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+
+  if (!userMessage) {
+    res.status(400).json({ message: 'Field "message" is required' });
+    return;
+  }
+
+  chat.entries.push(createEntry('USER', userMessage));
+  const assistantReply = generateAssistantReply(userMessage);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 600);
+  });
+
+  const chunks = assistantReply.match(/.{1,4}/g) || [assistantReply];
+  for (const chunk of chunks) {
+    res.write(`event:chunk\n`);
+    res.write(`data:${JSON.stringify({ content: chunk })}\n\n`);
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+
+  chat.entries.push(createEntry('ASSISTANT', assistantReply));
+  res.write('event:final\n');
+  res.write(`data:${JSON.stringify(chat)}\n\n`);
+  res.end();
+});
+
 app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`Mock chat server is running at http://localhost:${port}`);

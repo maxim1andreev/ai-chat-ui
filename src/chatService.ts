@@ -4,7 +4,7 @@ import {
   listChatsRequest,
   sendMessageRequest,
 } from './api/chatApi';
-import type { ChatMessage, ChatRole, ChatState, NormalizedChat } from './types/chat';
+import type { ChatMessage, ChatRole, ChatState, NormalizedChat, SendMessageResult } from './types/chat';
 
 const MOCK_DELAY_MS = 700;
 const DEFAULT_CHAT_TITLE = 'Новый чат';
@@ -15,7 +15,7 @@ const MOCK_FALLBACKS = [
   'Могу подготовить пример кода под твой стек.',
 ];
 
-function parseEnvBoolean(value, fallback = false) {
+function parseEnvBoolean(value: unknown, fallback = false): boolean {
   if (value === undefined) return fallback;
   const normalized = String(value).trim().toLowerCase();
   return ['true', '1', 'yes', 'on'].includes(normalized);
@@ -36,9 +36,15 @@ function toChatState(chat: NormalizedChat): ChatState {
   return {
     id: chat.id,
     title: chat.title,
-    messages: chat.messages.map((message) => createMessage(message.role, message.content)),
+    messages: chat.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+    })),
     isEntriesLoaded: chat.isEntriesLoaded,
     isSending: false,
+    isAwaitingFirstChunk: false,
+    streamingMessageId: undefined,
     error: '',
     updatedAt: chat.updatedAt || Date.now(),
   };
@@ -79,7 +85,7 @@ function getMockReply(text: string): string {
   return MOCK_FALLBACKS[Math.floor(Math.random() * MOCK_FALLBACKS.length)];
 }
 
-function wait(ms) {
+function wait(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -107,19 +113,24 @@ export async function getChat(chatId: string): Promise<ChatState> {
 interface RequestAssistantReplyParams {
   chatId: string;
   text: string;
+  onChunk?: (chunk: string) => void;
 }
 
 export async function requestAssistantReply({
   chatId,
   text,
-}: RequestAssistantReplyParams): Promise<string> {
+  onChunk,
+}: RequestAssistantReplyParams): Promise<SendMessageResult> {
   if (USE_MOCK_CHAT) {
     await wait(MOCK_DELAY_MS);
-    return getMockReply(text);
+    return { assistantText: getMockReply(text) };
   }
 
-  return sendMessageRequest({
-    chatId,
-    content: text,
-  });
+  return sendMessageRequest(
+    {
+      chatId,
+      content: text,
+    },
+    { onChunk },
+  );
 }

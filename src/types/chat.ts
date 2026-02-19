@@ -12,6 +12,8 @@ export interface ChatState {
   messages: ChatMessage[];
   isEntriesLoaded: boolean;
   isSending: boolean;
+  isAwaitingFirstChunk: boolean;
+  streamingMessageId?: string;
   error: string;
   updatedAt: number;
 }
@@ -53,9 +55,18 @@ export interface ApiSendMessageResponse {
   entries: ApiChatEntryDto[];
 }
 
+export interface ApiStreamChunkDto {
+  content: string;
+}
+
 export interface SendMessagePayload {
   chatId: string;
   content: string;
+}
+
+export interface SendMessageResult {
+  assistantText: string;
+  finalChat?: NormalizedChat;
 }
 
 export interface NormalizedChat {

@@ -71,7 +71,7 @@
 }
 ```
 
-## 4. POST `/chats/{chatUid}/entries`
+## 4. POST `/chats/{chatUid}/entries/stream`
 
 Тело:
 
@@ -81,10 +81,24 @@
 }
 ```
 
-Ответ: тот же DTO, что у `GET /chats/{chatUid}`, но с добавленными новыми `entries`.
+Ответ: `text/event-stream`.
+
+Пример событий:
+
+```text
+event:chunk
+data:{"content":"Пр"}
+
+event:chunk
+data:{"content":"ивет"}
+
+event:final
+data:{"uid":"...","name":"Test chat","createdAt":"...","entries":[...]}
+```
 
 Поведение фронта:
 
 - `entryType: "USER"` -> `role: "user"`
 - `entryType: "ASSISTANT"` -> `role: "assistant"`
-- после отправки фронт берет последнее `ASSISTANT` сообщение из `entries`
+- `chunk` отображаются в UI постепенно
+- после `final` фронт синхронизирует историю полным DTO чата

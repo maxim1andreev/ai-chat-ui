@@ -43,7 +43,7 @@ function formatChatTitle(text: string): string {
 }
 
 function getChatPreview(chat: ChatState): string {
-  const lastMessage = chat.messages.at(-1);
+  const lastMessage = chat.messages[chat.messages.length - 1];
   if (!lastMessage) return 'Пустой чат';
   const prefix = lastMessage.role === 'user' ? 'Вы: ' : 'AI: ';
   const line = `${prefix}${lastMessage.content}`.replace(/\s+/g, ' ').trim();
@@ -62,13 +62,14 @@ export default function App() {
   const messages = activeChat?.messages ?? [];
   const isSending = Boolean(activeChat?.isSending);
   const error = activeChat?.error ?? '';
+  const lastMessageContent = messages[messages.length - 1]?.content ?? '';
 
   const hasText = useMemo(() => input.trim().length > 0, [input]);
 
   useEffect(() => {
     if (!messagesRef.current) return;
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-  }, [activeChatId, messages.length, isSending]);
+  }, [activeChatId, messages.length, lastMessageContent, isSending]);
 
   useEffect(() => {
     if (activeChatId || chats.length === 0) return;
@@ -77,16 +78,17 @@ export default function App() {
 
   useEffect(() => {
     if (!activeChatId) return;
-    const chat = chats.find((item) => item.id === activeChatId);
+    const chatId = activeChatId;
+    const chat = chats.find((item) => item.id === chatId);
     if (!chat || chat.isEntriesLoaded || chat.isSending) return;
 
     let cancelled = false;
 
     async function loadChatDetails() {
       try {
-        const fullChat = await getChat(activeChatId);
+        const fullChat = await getChat(chatId);
         if (cancelled) return;
-        setChats((prev) => promoteUpdatedChat(prev, activeChatId, (current) => ({
+        setChats((prev) => promoteUpdatedChat(prev, chatId, (current) => ({
           ...current,
           messages: fullChat.messages,
           isEntriesLoaded: true,
@@ -163,6 +165,7 @@ export default function App() {
 
     const userMessage = createMessage('user', text);
     const chatId = activeChat.id;
+    const streamingMessageId = crypto.randomUUID();
     const nextMessages = [...activeChat.messages, userMessage];
 
     setChats((prev) =>
@@ -172,6 +175,8 @@ export default function App() {
         isEntriesLoaded: true,
         title: chat.title === DEFAULT_CHAT_TITLE ? formatChatTitle(text) : chat.title,
         isSending: true,
+        isAwaitingFirstChunk: true,
+        streamingMessageId,
         error: '',
         updatedAt: Date.now(),
       })),
@@ -179,15 +184,51 @@ export default function App() {
     setInput('');
 
     try {
-      const aiReply = await requestAssistantReply({
+      const result = await requestAssistantReply({
         chatId,
         text,
+        onChunk: (chunk) => {
+          setChats((prev) =>
+            promoteUpdatedChat(prev, chatId, (chat) => {
+              const existingIndex = chat.messages.findIndex(
+                (message) => message.id === streamingMessageId,
+              );
+
+              const nextChatMessages =
+                existingIndex >= 0
+                  ? chat.messages.map((message, index) =>
+                      index === existingIndex
+                        ? { ...message, content: `${message.content}${chunk}` }
+                        : message,
+                    )
+                  : [...chat.messages, { id: streamingMessageId, role: 'assistant' as const, content: chunk }];
+
+              return {
+                ...chat,
+                messages: nextChatMessages,
+                isAwaitingFirstChunk: false,
+                streamingMessageId,
+                updatedAt: Date.now(),
+              };
+            }),
+          );
+        },
       });
+
+      const finalMessages = result.finalChat?.messages ?? [];
+      const hasFinalMessages = finalMessages.length > 0;
+
       setChats((prev) =>
         promoteUpdatedChat(prev, chatId, (chat) => ({
           ...chat,
-          messages: [...chat.messages, createMessage('assistant', aiReply)],
+          title: result.finalChat?.title || chat.title,
+          messages: hasFinalMessages
+            ? finalMessages
+            : [...chat.messages, createMessage('assistant', result.assistantText)],
+          isEntriesLoaded: true,
           isSending: false,
+          isAwaitingFirstChunk: false,
+          streamingMessageId: undefined,
           updatedAt: Date.now(),
         })),
       );
@@ -197,6 +238,8 @@ export default function App() {
         promoteUpdatedChat(prev, chatId, (chat) => ({
           ...chat,
           isSending: false,
+          isAwaitingFirstChunk: false,
+          streamingMessageId: undefined,
           error: `Ошибка запроса: ${message}`,
           updatedAt: Date.now(),
         })),
@@ -271,7 +314,7 @@ export default function App() {
                 </Flex>
               );
             })}
-            {isSending && (
+            {isSending && activeChat?.isAwaitingFirstChunk && (
               <Flex justify="start">
                 <Card className="bubble bubble-assistant" size="small">
                   <Space>
