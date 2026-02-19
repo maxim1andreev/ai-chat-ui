@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import { MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
 import { Alert, Avatar, Button, Card, Flex, Input, Space, Spin, Typography } from 'antd';
+import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
+import remarkGfm from 'remark-gfm';
 import {
   createChat,
   createMessage,
@@ -14,7 +17,7 @@ import type { ChatState } from './types/chat';
 import './App.css';
 
 const { TextArea } = Input;
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 function sortChats(chats: ChatState[]): ChatState[] {
   return [...chats].sort((a, b) => {
@@ -53,6 +56,7 @@ function getChatPreview(chat: ChatState): string {
 export default function App() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
   const [chats, setChats] = useState<ChatState[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -68,8 +72,14 @@ export default function App() {
 
   useEffect(() => {
     if (!messagesRef.current) return;
+    shouldAutoScrollRef.current = true;
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-  }, [activeChatId, messages.length, lastMessageContent, isSending]);
+  }, [activeChatId]);
+
+  useEffect(() => {
+    if (!messagesRef.current || !shouldAutoScrollRef.current) return;
+    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [messages.length, lastMessageContent, isSending]);
 
   useEffect(() => {
     if (activeChatId || chats.length === 0) return;
@@ -294,7 +304,17 @@ export default function App() {
 
           {initError && <Alert type="error" showIcon message={initError} />}
 
-          <div className="chat-messages" aria-live="polite" ref={messagesRef}>
+          <div
+            className="chat-messages"
+            aria-live="polite"
+            ref={messagesRef}
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              const distanceToBottom =
+                element.scrollHeight - element.scrollTop - element.clientHeight;
+              shouldAutoScrollRef.current = distanceToBottom < 80;
+            }}
+          >
             {messages.map((message) => {
               const isUser = message.role === 'user';
               return (
@@ -307,7 +327,14 @@ export default function App() {
                       />
                       <div>
                         <Text strong>{isUser ? 'Вы' : 'AI'}</Text>
-                        <Paragraph className="bubble-text">{message.content}</Paragraph>
+                        <div className="bubble-text markdown-content">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[rehypeSanitize]}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
                       </div>
                     </Space>
                   </Card>

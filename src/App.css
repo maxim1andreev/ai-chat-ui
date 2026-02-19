@@ -159,6 +159,50 @@
   white-space: pre-wrap;
 }
 
+.markdown-content {
+  margin-top: 4px;
+}
+
+.markdown-content > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p {
+  margin: 0.35rem 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.35rem 0;
+  padding-left: 1.2rem;
+}
+
+.markdown-content pre {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.08);
+  overflow-x: auto;
+}
+
+.bubble-user .markdown-content pre {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.markdown-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.92em;
+}
+
+.markdown-content a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 @media (max-width: 768px) {
   .app {
     padding: 10px;

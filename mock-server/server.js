@@ -32,6 +32,43 @@ function createChat(name) {
 
 function generateAssistantReply(userText) {
   const text = userText.toLowerCase();
+  if (text.includes('markdown') || text.includes('md')) {
+    return `### Пример Markdown
+
+Это **жирный** и *курсивный* текст.
+
+- пункт 1
+- пункт 2
+- пункт 3
+
+\`\`\`ts
+type User = { id: string; name: string };
+const user: User = { id: '1', name: 'Max' };
+\`\`\`
+
+[Ссылка на Vite](https://vite.dev)`;
+  }
+  if (text.includes('table') || text.includes('таблиц')) {
+    return `| Поле | Значение |
+| --- | --- |
+| model | qwen |
+| stream | true |
+| format | markdown |`;
+  }
+  if (text.includes('code') || text.includes('код')) {
+    return `\`\`\`js
+function sum(a, b) {
+  return a + b;
+}
+console.log(sum(2, 3));
+\`\`\``;
+  }
+  if (text.includes('list') || text.includes('спис')) {
+    return `1. Подключить API
+2. Отправить сообщение
+3. Обработать stream
+4. Обновить UI`;
+  }
   if (text.includes('погод')) {
     return 'Завтра ожидается облачность, возможен слабый снег, температура около -8°C.';
   }
@@ -54,6 +91,20 @@ const chats = [];
     createEntry(
       'ASSISTANT',
       'Завтра в Москве ожидается туман, температура воздуха будет около -7°C.',
+    ),
+    createEntry('USER', 'Покажи markdown пример'),
+    createEntry(
+      'ASSISTANT',
+      `### Демо markdown
+
+Вот пример списка:
+- один
+- два
+
+И небольшой код:
+\`\`\`python
+print("hello markdown")
+\`\`\``,
     ),
   );
   chats.push(seedChat);
@@ -162,7 +213,11 @@ app.post('/chats/:chatUid/entries/stream', async (req, res) => {
     setTimeout(resolve, 600);
   });
 
-  const chunks = assistantReply.match(/.{1,4}/g) || [assistantReply];
+  const units = Array.from(assistantReply);
+  const chunks = [];
+  for (let i = 0; i < units.length; i += 4) {
+    chunks.push(units.slice(i, i + 4).join(''));
+  }
   for (const chunk of chunks) {
     res.write(`event:chunk\n`);
     res.write(`data:${JSON.stringify({ content: chunk })}\n\n`);
