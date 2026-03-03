@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
-import { MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
+import { AudioOutlined, MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
 import { Alert, Avatar, Button, Card, Flex, Input, Space, Spin, Typography } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
+import { transcribeAudioRequest } from './api/whisperApi';
 import {
   createChat,
   createMessage,
@@ -56,12 +57,18 @@ function getChatPreview(chat: ChatState): string {
 export default function App() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const shouldAutoScrollRef = useRef(true);
   const [chats, setChats] = useState<ChatState[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [initError, setInitError] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState('');
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const messages = activeChat?.messages ?? [];
   const isSending = Boolean(activeChat?.isSending);
@@ -150,6 +157,16 @@ export default function App() {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
+
   async function handleCreateChat() {
     if (isCreatingChat) return;
     setIsCreatingChat(true);
@@ -165,6 +182,97 @@ export default function App() {
       setInitError(`Ошибка создания чата: ${message}`);
     } finally {
       setIsCreatingChat(false);
+    }
+  }
+
+  async function transcribeRecordedAudio(blob: Blob) {
+    const extension = blob.type.includes('webm') ? 'webm' : 'wav';
+    const file = new File([blob], `voice-note.${extension}`, {
+      type: blob.type || 'audio/webm',
+    });
+
+    setIsTranscribing(true);
+    setTranscriptionError('');
+
+    try {
+      const transcript = await transcribeAudioRequest(file);
+      setInput((prev) => {
+        const current = prev.trim();
+        if (!current) return transcript;
+        return `${prev}${prev.endsWith('\n') ? '' : '\n'}${transcript}`;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось распознать аудио';
+      setTranscriptionError(`Ошибка распознавания: ${message}`);
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  async function handleAudioToggle() {
+    if (isTranscribing) return;
+
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === 'undefined'
+    ) {
+      setTranscriptionError('Браузер не поддерживает запись с микрофона.');
+      return;
+    }
+
+    try {
+      setTranscriptionError('');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const recordedBlob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || 'audio/webm',
+        });
+        audioChunksRef.current = [];
+        mediaRecorderRef.current = null;
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+
+        if (recordedBlob.size > 0) {
+          await transcribeRecordedAudio(recordedBlob);
+        }
+      };
+
+      recorder.onerror = () => {
+        setIsRecording(false);
+        setTranscriptionError('Ошибка записи аудио.');
+        mediaRecorderRef.current = null;
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось получить доступ к микрофону';
+      setTranscriptionError(`Ошибка записи: ${message}`);
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setIsRecording(false);
     }
   }
 
@@ -267,6 +375,7 @@ export default function App() {
             block
             onClick={handleCreateChat}
             loading={isCreatingChat}
+            disabled={isRecording || isTranscribing}
           >
             Новый чат
           </Button>
@@ -369,15 +478,38 @@ export default function App() {
               autoSize={{ minRows: 2, maxRows: 6 }}
               disabled={isSending}
             />
-            <Button
-              type="primary"
-              htmlType="submit"
-              icon={<SendOutlined />}
-              disabled={!hasText}
-              loading={isSending}
-            >
-              Отправить
-            </Button>
+            {transcriptionError && <Alert type="warning" showIcon message={transcriptionError} />}
+            <div className="chat-actions">
+              <Button
+                className={`voice-button ${isRecording ? 'voice-button-recording' : ''} ${
+                  isTranscribing ? 'voice-button-transcribing' : ''
+                }`}
+                icon={<AudioOutlined />}
+                onClick={handleAudioToggle}
+                loading={isTranscribing}
+                disabled={isSending}
+                danger={isRecording}
+              >
+                <span className="voice-button-label">
+                  {isRecording && <span className="voice-indicator voice-indicator-recording" />}
+                  {isTranscribing && <span className="voice-indicator voice-indicator-transcribing" />}
+                  {isRecording
+                    ? 'Слушаю...'
+                    : isTranscribing
+                      ? 'Распознаю...'
+                      : 'Надиктовать'}
+                </span>
+              </Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<SendOutlined />}
+                disabled={!hasText}
+                loading={isSending}
+              >
+                Отправить
+              </Button>
+            </div>
           </form>
         </Card>
       </div>

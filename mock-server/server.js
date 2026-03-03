@@ -1,9 +1,11 @@
 import cors from 'cors';
 import express from 'express';
 import crypto from 'crypto';
+import multer from 'multer';
 
 const app = express();
 const port = process.env.PORT || 20010;
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json());
@@ -79,6 +81,21 @@ console.log(sum(2, 3));
     return 'Для Qwen лучше держать system prompt на backend и логировать входные messages.';
   }
   return 'Принято. Могу продолжить и расписать это более подробно по шагам.';
+}
+
+function generateTranscription(fileName = '') {
+  const normalized = fileName.toLowerCase();
+  if (normalized.includes('weather')) {
+    return 'Какая завтра будет погода в Москве?';
+  }
+  if (normalized.includes('markdown') || normalized.includes('md')) {
+    return 'Покажи markdown пример с кодом и списком.';
+  }
+  if (normalized.includes('react')) {
+    return 'Расскажи кратко про React hooks.';
+  }
+
+  return 'The stale smell of old beer lingers.\nIt takes heat to bring out the odor.\nA cold dip restores health and zest.\nA salt pickle tastes fine with ham.\nTacos al pastor are my favorite.\nA zestful food is the hot cross bun.';
 }
 
 const chats = [];
@@ -229,6 +246,29 @@ app.post('/chats/:chatUid/entries/stream', async (req, res) => {
   res.write('event:final\n');
   res.write(`data:${JSON.stringify(chat)}\n\n`);
   res.end();
+});
+
+app.post('/inference', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ message: 'Field "file" is required' });
+    return;
+  }
+
+  const responseFormat =
+    typeof req.body?.response_format === 'string' ? req.body.response_format : '';
+
+  if (responseFormat && responseFormat !== 'json') {
+    res.status(400).json({ message: 'Only response_format=json is supported' });
+    return;
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 1000);
+  });
+
+  res.json({
+    text: generateTranscription(req.file.originalname),
+  });
 });
 
 app.listen(port, () => {
