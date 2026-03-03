@@ -20,6 +20,56 @@ import './App.css';
 const { TextArea } = Input;
 const { Title, Text } = Typography;
 
+function mergeFloat32Chunks(chunks: Float32Array[]): Float32Array {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+
+  chunks.forEach((chunk) => {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  });
+
+  return merged;
+}
+
+function writeWavString(view: DataView, offset: number, value: string) {
+  for (let i = 0; i < value.length; i += 1) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+
+  writeWavString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeWavString(view, 8, 'WAVE');
+  writeWavString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeWavString(view, 36, 'data');
+  view.setUint32(40, samples.length * bytesPerSample, true);
+
+  let offset = 44;
+  samples.forEach((sample) => {
+    const normalized = Math.max(-1, Math.min(1, sample));
+    const pcm = normalized < 0 ? normalized * 0x8000 : normalized * 0x7fff;
+    view.setInt16(offset, pcm, true);
+    offset += bytesPerSample;
+  });
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 function sortChats(chats: ChatState[]): ChatState[] {
   return [...chats].sort((a, b) => {
     if (a.updatedAt !== b.updatedAt) {
@@ -57,9 +107,12 @@ function getChatPreview(chat: ChatState): string {
 export default function App() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const pcmChunksRef = useRef<Float32Array[]>([]);
+  const sampleRateRef = useRef(16000);
   const shouldAutoScrollRef = useRef(true);
   const [chats, setChats] = useState<ChatState[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -159,9 +212,9 @@ export default function App() {
 
   useEffect(
     () => () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
+      processorNodeRef.current?.disconnect();
+      sourceNodeRef.current?.disconnect();
+      audioContextRef.current?.close();
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     },
     [],
@@ -186,9 +239,8 @@ export default function App() {
   }
 
   async function transcribeRecordedAudio(blob: Blob) {
-    const extension = blob.type.includes('webm') ? 'webm' : 'wav';
-    const file = new File([blob], `voice-note.${extension}`, {
-      type: blob.type || 'audio/webm',
+    const file = new File([blob], 'voice-note.wav', {
+      type: 'audio/wav',
     });
 
     setIsTranscribing(true);
@@ -213,15 +265,30 @@ export default function App() {
     if (isTranscribing) return;
 
     if (isRecording) {
-      mediaRecorderRef.current?.stop();
+      processorNodeRef.current?.disconnect();
+      sourceNodeRef.current?.disconnect();
+      audioContextRef.current?.close();
+      sourceNodeRef.current = null;
+      processorNodeRef.current = null;
+      audioContextRef.current = null;
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
       setIsRecording(false);
+      const recordedBlob = encodeWav(
+        mergeFloat32Chunks(pcmChunksRef.current),
+        sampleRateRef.current,
+      );
+      pcmChunksRef.current = [];
+      if (recordedBlob.size > 44) {
+        void transcribeRecordedAudio(recordedBlob);
+      }
       return;
     }
 
     if (
       typeof navigator === 'undefined' ||
       !navigator.mediaDevices?.getUserMedia ||
-      typeof MediaRecorder === 'undefined'
+      typeof AudioContext === 'undefined'
     ) {
       setTranscriptionError('Браузер не поддерживает запись с микрофона.');
       return;
@@ -231,47 +298,35 @@ export default function App() {
       setTranscriptionError('');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
-      audioChunksRef.current = [];
+      pcmChunksRef.current = [];
 
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      sampleRateRef.current = audioContext.sampleRate;
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      sourceNodeRef.current = sourceNode;
+
+      const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+      processorNodeRef.current = processorNode;
+
+      processorNode.onaudioprocess = (event) => {
+        const channelData = event.inputBuffer.getChannelData(0);
+        pcmChunksRef.current.push(new Float32Array(channelData));
       };
 
-      recorder.onstop = async () => {
-        const recordedBlob = new Blob(audioChunksRef.current, {
-          type: recorder.mimeType || 'audio/webm',
-        });
-        audioChunksRef.current = [];
-        mediaRecorderRef.current = null;
-        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-
-        if (recordedBlob.size > 0) {
-          await transcribeRecordedAudio(recordedBlob);
-        }
-      };
-
-      recorder.onerror = () => {
-        setIsRecording(false);
-        setTranscriptionError('Ошибка записи аудио.');
-        mediaRecorderRef.current = null;
-        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      };
-
-      recorder.start();
+      sourceNode.connect(processorNode);
+      processorNode.connect(audioContext.destination);
       setIsRecording(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Не удалось получить доступ к микрофону';
       setTranscriptionError(`Ошибка записи: ${message}`);
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
-      mediaRecorderRef.current = null;
+      processorNodeRef.current = null;
+      sourceNodeRef.current = null;
+      audioContextRef.current = null;
+      pcmChunksRef.current = [];
       setIsRecording(false);
     }
   }
