@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
-import { AudioOutlined, MessageOutlined, PlusOutlined, RobotOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
-import { Alert, Avatar, Button, Card, Flex, Input, Space, Spin, Typography } from 'antd';
-import ReactMarkdown from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
-import remarkGfm from 'remark-gfm';
-import { transcribeAudioRequest } from './api/whisperApi';
+import type { FormEvent, MutableRefObject, UIEvent } from 'react';
+import { Alert, Card, Typography } from 'antd';
+import { ChatComposer } from './components/ChatComposer';
+import { ChatMessages } from './components/ChatMessages';
+import { ChatSidebar } from './components/ChatSidebar';
+import { useVoiceRecorder } from './hooks/useVoiceRecorder';
 import {
   createChat,
   createMessage,
@@ -17,58 +16,7 @@ import {
 import type { ChatState } from './types/chat';
 import './App.css';
 
-const { TextArea } = Input;
 const { Title, Text } = Typography;
-
-function mergeFloat32Chunks(chunks: Float32Array[]): Float32Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Float32Array(totalLength);
-  let offset = 0;
-
-  chunks.forEach((chunk) => {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  });
-
-  return merged;
-}
-
-function writeWavString(view: DataView, offset: number, value: string) {
-  for (let i = 0; i < value.length; i += 1) {
-    view.setUint8(offset + i, value.charCodeAt(i));
-  }
-}
-
-function encodeWav(samples: Float32Array, sampleRate: number): Blob {
-  const bytesPerSample = 2;
-  const blockAlign = bytesPerSample;
-  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
-  const view = new DataView(buffer);
-
-  writeWavString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
-  writeWavString(view, 8, 'WAVE');
-  writeWavString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeWavString(view, 36, 'data');
-  view.setUint32(40, samples.length * bytesPerSample, true);
-
-  let offset = 44;
-  samples.forEach((sample) => {
-    const normalized = Math.max(-1, Math.min(1, sample));
-    const pcm = normalized < 0 ? normalized * 0x8000 : normalized * 0x7fff;
-    view.setInt16(offset, pcm, true);
-    offset += bytesPerSample;
-  });
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
 
 function sortChats(chats: ChatState[]): ChatState[] {
   return [...chats].sort((a, b) => {
@@ -104,24 +52,39 @@ function getChatPreview(chat: ChatState): string {
   return line.length > 56 ? `${line.slice(0, 56)}...` : line;
 }
 
+function handleMessagesScroll(
+  event: UIEvent<HTMLDivElement>,
+  shouldAutoScrollRef: MutableRefObject<boolean>,
+) {
+  const element = event.currentTarget;
+  const distanceToBottom =
+    element.scrollHeight - element.scrollTop - element.clientHeight;
+  shouldAutoScrollRef.current = distanceToBottom < 80;
+}
+
 export default function App() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
-  const pcmChunksRef = useRef<Float32Array[]>([]);
-  const sampleRateRef = useRef(16000);
   const shouldAutoScrollRef = useRef(true);
   const [chats, setChats] = useState<ChatState[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [initError, setInitError] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [transcriptionError, setTranscriptionError] = useState('');
+  const {
+    isRecording,
+    isTranscribing,
+    transcriptionError,
+    handleAudioToggle,
+  } = useVoiceRecorder({
+    onTranscription: (transcript) => {
+      setInput((prev) => {
+        const current = prev.trim();
+        if (!current) return transcript;
+        return `${prev}${prev.endsWith('\n') ? '' : '\n'}${transcript}`;
+      });
+    },
+  });
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const messages = activeChat?.messages ?? [];
   const isSending = Boolean(activeChat?.isSending);
@@ -210,16 +173,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(
-    () => () => {
-      processorNodeRef.current?.disconnect();
-      sourceNodeRef.current?.disconnect();
-      audioContextRef.current?.close();
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    },
-    [],
-  );
-
   async function handleCreateChat() {
     if (isCreatingChat) return;
     setIsCreatingChat(true);
@@ -235,99 +188,6 @@ export default function App() {
       setInitError(`Ошибка создания чата: ${message}`);
     } finally {
       setIsCreatingChat(false);
-    }
-  }
-
-  async function transcribeRecordedAudio(blob: Blob) {
-    const file = new File([blob], 'voice-note.wav', {
-      type: 'audio/wav',
-    });
-
-    setIsTranscribing(true);
-    setTranscriptionError('');
-
-    try {
-      const transcript = await transcribeAudioRequest(file);
-      setInput((prev) => {
-        const current = prev.trim();
-        if (!current) return transcript;
-        return `${prev}${prev.endsWith('\n') ? '' : '\n'}${transcript}`;
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Не удалось распознать аудио';
-      setTranscriptionError(`Ошибка распознавания: ${message}`);
-    } finally {
-      setIsTranscribing(false);
-    }
-  }
-
-  async function handleAudioToggle() {
-    if (isTranscribing) return;
-
-    if (isRecording) {
-      processorNodeRef.current?.disconnect();
-      sourceNodeRef.current?.disconnect();
-      audioContextRef.current?.close();
-      sourceNodeRef.current = null;
-      processorNodeRef.current = null;
-      audioContextRef.current = null;
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-      setIsRecording(false);
-      const recordedBlob = encodeWav(
-        mergeFloat32Chunks(pcmChunksRef.current),
-        sampleRateRef.current,
-      );
-      pcmChunksRef.current = [];
-      if (recordedBlob.size > 44) {
-        void transcribeRecordedAudio(recordedBlob);
-      }
-      return;
-    }
-
-    if (
-      typeof navigator === 'undefined' ||
-      !navigator.mediaDevices?.getUserMedia ||
-      typeof AudioContext === 'undefined'
-    ) {
-      setTranscriptionError('Браузер не поддерживает запись с микрофона.');
-      return;
-    }
-
-    try {
-      setTranscriptionError('');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
-      pcmChunksRef.current = [];
-
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      sampleRateRef.current = audioContext.sampleRate;
-
-      const sourceNode = audioContext.createMediaStreamSource(stream);
-      sourceNodeRef.current = sourceNode;
-
-      const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
-      processorNodeRef.current = processorNode;
-
-      processorNode.onaudioprocess = (event) => {
-        const channelData = event.inputBuffer.getChannelData(0);
-        pcmChunksRef.current.push(new Float32Array(channelData));
-      };
-
-      sourceNode.connect(processorNode);
-      processorNode.connect(audioContext.destination);
-      setIsRecording(true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Не удалось получить доступ к микрофону';
-      setTranscriptionError(`Ошибка записи: ${message}`);
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-      processorNodeRef.current = null;
-      sourceNodeRef.current = null;
-      audioContextRef.current = null;
-      pcmChunksRef.current = [];
-      setIsRecording(false);
     }
   }
 
@@ -423,42 +283,18 @@ export default function App() {
   return (
     <main className="app">
       <div className="chat-layout">
-        <aside className="chat-sidebar">
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            block
-            onClick={handleCreateChat}
-            loading={isCreatingChat}
-            disabled={isRecording || isTranscribing}
-          >
-            Новый чат
-          </Button>
-
-          <div className="chat-list">
-            {chats.map((chat) => (
-              <button
-                key={chat.id}
-                type="button"
-                className={`chat-list-item ${chat.id === activeChatId ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveChatId(chat.id);
-                  setInput('');
-                }}
-              >
-                <Space align="start" size={8}>
-                  <MessageOutlined />
-                  <div className="chat-list-text">
-                    <Text strong ellipsis>
-                      {chat.title}
-                    </Text>
-                    <Text ellipsis>{getChatPreview(chat)}</Text>
-                  </div>
-                </Space>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <ChatSidebar
+          chats={chats}
+          activeChatId={activeChatId}
+          isCreatingChat={isCreatingChat}
+          isVoiceBusy={isRecording || isTranscribing}
+          getChatPreview={getChatPreview}
+          onCreateChat={handleCreateChat}
+          onSelectChat={(chatId) => {
+            setActiveChatId(chatId);
+            setInput('');
+          }}
+        />
 
         <Card className="chat-shell" bordered={false}>
           <header className="chat-header">
@@ -468,104 +304,28 @@ export default function App() {
 
           {initError && <Alert type="error" showIcon message={initError} />}
 
-          <div
-            className="chat-messages"
-            aria-live="polite"
-            ref={messagesRef}
-            onScroll={(event) => {
-              const element = event.currentTarget;
-              const distanceToBottom =
-                element.scrollHeight - element.scrollTop - element.clientHeight;
-              shouldAutoScrollRef.current = distanceToBottom < 80;
-            }}
-          >
-            {messages.map((message) => {
-              const isUser = message.role === 'user';
-              return (
-                <Flex key={message.id} justify={isUser ? 'end' : 'start'}>
-                  <Card className={`bubble bubble-${message.role}`} size="small">
-                    <Space align="start">
-                      <Avatar
-                        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-                        className="bubble-avatar"
-                      />
-                      <div>
-                        <Text strong>{isUser ? 'Вы' : 'AI'}</Text>
-                        <div className="bubble-text markdown-content">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            rehypePlugins={[rehypeSanitize]}
-                          >
-                            {message.content}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    </Space>
-                  </Card>
-                </Flex>
-              );
-            })}
-            {isSending && activeChat?.isAwaitingFirstChunk && (
-              <Flex justify="start">
-                <Card className="bubble bubble-assistant" size="small">
-                  <Space>
-                    <Spin size="small" />
-                    <Text>AI печатает...</Text>
-                  </Space>
-                </Card>
-              </Flex>
-            )}
-          </div>
+          <ChatMessages
+            messages={messages}
+            isSending={isSending}
+            isAwaitingFirstChunk={Boolean(activeChat?.isAwaitingFirstChunk)}
+            messagesRef={messagesRef}
+            onScroll={(event) => handleMessagesScroll(event, shouldAutoScrollRef)}
+          />
 
           {error && <Alert type="error" showIcon message={error} />}
 
-          <form className="chat-form" onSubmit={handleSubmit} ref={formRef}>
-            <TextArea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  formRef.current?.requestSubmit();
-                }
-              }}
-              placeholder="Напиши сообщение..."
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              disabled={isSending}
-            />
-            {transcriptionError && <Alert type="warning" showIcon message={transcriptionError} />}
-            <div className="chat-actions">
-              <Button
-                className={`voice-button ${isRecording ? 'voice-button-recording' : ''} ${
-                  isTranscribing ? 'voice-button-transcribing' : ''
-                }`}
-                icon={<AudioOutlined />}
-                onClick={handleAudioToggle}
-                loading={isTranscribing}
-                disabled={isSending}
-                danger={isRecording}
-              >
-                <span className="voice-button-label">
-                  {isRecording && <span className="voice-indicator voice-indicator-recording" />}
-                  {isTranscribing && <span className="voice-indicator voice-indicator-transcribing" />}
-                  {isRecording
-                    ? 'Слушаю...'
-                    : isTranscribing
-                      ? 'Распознаю...'
-                      : 'Надиктовать'}
-                </span>
-              </Button>
-              <Button
-                type="primary"
-                htmlType="submit"
-                icon={<SendOutlined />}
-                disabled={!hasText}
-                loading={isSending}
-              >
-                Отправить
-              </Button>
-            </div>
-          </form>
+          <ChatComposer
+            input={input}
+            hasText={hasText}
+            isSending={isSending}
+            isRecording={isRecording}
+            isTranscribing={isTranscribing}
+            transcriptionError={transcriptionError}
+            formRef={formRef}
+            onSubmit={handleSubmit}
+            onInputChange={setInput}
+            onAudioToggle={handleAudioToggle}
+          />
         </Card>
       </div>
     </main>
