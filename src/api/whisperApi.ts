@@ -12,7 +12,10 @@ function buildWhisperUrl(path: string): string {
   return `${WHISPER_CPP_URL}${path}`;
 }
 
-export async function transcribeAudioRequest(file: File): Promise<string> {
+export async function transcribeAudioRequest(
+  file: File,
+  signal?: AbortSignal,
+): Promise<string> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('response_format', 'json');
@@ -20,6 +23,7 @@ export async function transcribeAudioRequest(file: File): Promise<string> {
   const response = await fetch(buildWhisperUrl('/inference'), {
     method: 'POST',
     body: formData,
+    signal,
   });
 
   if (!response.ok) {

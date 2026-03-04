@@ -11,6 +11,7 @@ interface UseVoiceRecorderResult {
   isTranscribing: boolean;
   transcriptionError: string;
   handleAudioToggle: () => Promise<void>;
+  cancelAudioCapture: () => void;
 }
 
 export function useVoiceRecorder({
@@ -22,6 +23,8 @@ export function useVoiceRecorder({
   const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
   const pcmChunksRef = useRef<Float32Array[]>([]);
   const sampleRateRef = useRef(16000);
+  const transcriptionAbortControllerRef = useRef<AbortController | null>(null);
+  const transcriptionRequestIdRef = useRef(0);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -29,6 +32,7 @@ export function useVoiceRecorder({
 
   useEffect(
     () => () => {
+      transcriptionAbortControllerRef.current?.abort();
       processorNodeRef.current?.disconnect();
       sourceNodeRef.current?.disconnect();
       audioContextRef.current?.close();
@@ -37,22 +41,62 @@ export function useVoiceRecorder({
     [],
   );
 
+  function stopRecordingSession() {
+    processorNodeRef.current?.disconnect();
+    sourceNodeRef.current?.disconnect();
+    audioContextRef.current?.close();
+    sourceNodeRef.current = null;
+    processorNodeRef.current = null;
+    audioContextRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    setIsRecording(false);
+  }
+
   async function transcribeRecordedAudio(blob: Blob) {
     const file = new File([blob], 'voice-note.wav', {
       type: 'audio/wav',
     });
 
+    const requestId = transcriptionRequestIdRef.current + 1;
+    transcriptionRequestIdRef.current = requestId;
+    const abortController = new AbortController();
+    transcriptionAbortControllerRef.current = abortController;
+
     setIsTranscribing(true);
     setTranscriptionError('');
 
     try {
-      const transcript = await transcribeAudioRequest(file);
+      const transcript = await transcribeAudioRequest(file, abortController.signal);
+      if (transcriptionRequestIdRef.current !== requestId) return;
       onTranscription(transcript);
     } catch (error) {
+      if (abortController.signal.aborted) return;
+      if (transcriptionRequestIdRef.current !== requestId) return;
       const message = error instanceof Error ? error.message : 'Не удалось распознать аудио';
       setTranscriptionError(`Ошибка распознавания: ${message}`);
     } finally {
+      if (transcriptionRequestIdRef.current === requestId) {
+        transcriptionAbortControllerRef.current = null;
+        setIsTranscribing(false);
+      }
+    }
+  }
+
+  function cancelAudioCapture() {
+    if (isRecording) {
+      stopRecordingSession();
+      pcmChunksRef.current = [];
+      setTranscriptionError('');
+      return;
+    }
+
+    if (isTranscribing) {
+      transcriptionRequestIdRef.current += 1;
+      transcriptionAbortControllerRef.current?.abort();
+      transcriptionAbortControllerRef.current = null;
       setIsTranscribing(false);
+      setTranscriptionError('');
     }
   }
 
@@ -60,15 +104,7 @@ export function useVoiceRecorder({
     if (isTranscribing) return;
 
     if (isRecording) {
-      processorNodeRef.current?.disconnect();
-      sourceNodeRef.current?.disconnect();
-      audioContextRef.current?.close();
-      sourceNodeRef.current = null;
-      processorNodeRef.current = null;
-      audioContextRef.current = null;
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-      setIsRecording(false);
+      stopRecordingSession();
 
       const recordedBlob = encodeWav(
         mergeFloat32Chunks(pcmChunksRef.current),
@@ -133,5 +169,6 @@ export function useVoiceRecorder({
     isTranscribing,
     transcriptionError,
     handleAudioToggle,
+    cancelAudioCapture,
   };
 }

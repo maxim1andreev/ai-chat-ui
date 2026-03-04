@@ -32,6 +32,12 @@ function createChat(name) {
   };
 }
 
+function formatChatName(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'Новый чат';
+  return normalized.length > 42 ? `${normalized.slice(0, 42)}...` : normalized;
+}
+
 function generateAssistantReply(userText) {
   const text = userText.toLowerCase();
   if (text.includes('markdown') || text.includes('md')) {
@@ -192,6 +198,9 @@ app.post('/chats/:chatUid/entries', async (req, res) => {
   }
 
   chat.entries.push(createEntry('USER', userMessage));
+  if (chat.name === 'Новый чат') {
+    chat.name = formatChatName(userMessage);
+  }
 
   // Simulate model latency (blocking-style endpoint)
   await new Promise((resolve) => {
@@ -219,6 +228,9 @@ app.post('/chats/:chatUid/entries/stream', async (req, res) => {
   }
 
   chat.entries.push(createEntry('USER', userMessage));
+  if (chat.name === 'Новый чат') {
+    chat.name = formatChatName(userMessage);
+  }
   const assistantReply = generateAssistantReply(userMessage);
 
   res.setHeader('Content-Type', 'text/event-stream');

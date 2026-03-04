@@ -4,6 +4,7 @@ import { Alert, Card, Typography } from 'antd';
 import { ChatComposer } from './components/ChatComposer';
 import { ChatMessages } from './components/ChatMessages';
 import { ChatSidebar } from './components/ChatSidebar';
+import { FloatingChatWidget } from './components/FloatingChatWidget';
 import { useVoiceRecorder } from './hooks/useVoiceRecorder';
 import {
   createChat,
@@ -328,6 +329,8 @@ export default function App() {
           />
         </Card>
       </div>
+
+      <FloatingChatWidget />
     </main>
   );
 }

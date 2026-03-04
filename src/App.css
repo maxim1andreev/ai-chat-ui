@@ -1,6 +1,7 @@
 .app {
   min-height: 100vh;
   padding: 24px 16px;
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -38,7 +39,7 @@
   background: #ffffff;
   color: #1e293b;
   border-radius: 10px;
-  padding: 10px 10px;
+  padding: 10px;
   cursor: pointer;
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
@@ -296,11 +297,13 @@
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .app {
     padding: 10px;
   }
+}
 
+@media (max-width: 720px) {
   .chat-layout {
     height: 94vh;
     grid-template-columns: 1fr;
@@ -310,6 +313,12 @@
 
   .chat-sidebar {
     min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 12px;
   }
 
   .chat-shell {
