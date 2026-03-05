@@ -17,7 +17,14 @@ import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent, MutableRefObject, UIEvent } from 'react';
+import type {
+  FormEvent,
+  KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  MutableRefObject,
+  TouchEvent as ReactTouchEvent,
+  UIEvent,
+} from 'react';
 import { createChatRequest, getChatRequest, listChatsRequest, sendMessageRequest, transcribeAudioRequest } from './api';
 import { encodeWav, mergeFloat32Chunks } from './audio';
 import { DEFAULT_CHAT_TITLE, MOCK_DELAY_MS, USE_MOCK_CHAT } from './constants';
@@ -92,6 +99,7 @@ function handleMessagesScroll(
 export function FloatingChatWidget() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const launcherRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -101,6 +109,15 @@ export function FloatingChatWidget() {
   const sampleRateRef = useRef(16000);
   const transcriptionAbortControllerRef = useRef<AbortController | null>(null);
   const transcriptionRequestIdRef = useRef(0);
+  const dragMovedRef = useRef(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   const [chats, setChats] = useState<ChatState[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -112,6 +129,7 @@ export function FloatingChatWidget() {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState('');
+  const [anchorPosition, setAnchorPosition] = useState<{ x: number; y: number } | null>(null);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const messages = activeChat?.messages ?? [];
@@ -358,7 +376,6 @@ export function FloatingChatWidget() {
       setInput('');
       setInitError('');
       setIsOpen(true);
-      setIsHistoryOpen(false);
     } catch (createChatError) {
       const message =
         createChatError instanceof Error ? createChatError.message : 'Не удалось создать чат';
@@ -465,6 +482,11 @@ export function FloatingChatWidget() {
   }
 
   function handleToggleOpen() {
+    if (dragMovedRef.current) {
+      dragMovedRef.current = false;
+      return;
+    }
+
     if (isOpen) {
       setIsOpen(false);
       setIsHistoryOpen(false);
@@ -475,19 +497,126 @@ export function FloatingChatWidget() {
     setIsOpen(true);
   }
 
+  function beginLauncherDrag(clientX: number, clientY: number) {
+    if (!launcherRef.current) return;
+
+    const rect = launcherRef.current.getBoundingClientRect();
+    dragRef.current = {
+      startX: clientX,
+      startY: clientY,
+      originX: rect.left,
+      originY: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    dragMovedRef.current = false;
+
+    const onPointerMove = (moveEvent: MouseEvent | TouchEvent) => {
+      if (!dragRef.current) return;
+      if (moveEvent instanceof TouchEvent) {
+        moveEvent.preventDefault();
+      }
+      const point =
+        moveEvent instanceof MouseEvent
+          ? { x: moveEvent.clientX, y: moveEvent.clientY }
+          : moveEvent.touches[0]
+            ? { x: moveEvent.touches[0].clientX, y: moveEvent.touches[0].clientY }
+            : null;
+      if (!point) return;
+
+      const dx = point.x - dragRef.current.startX;
+      const dy = point.y - dragRef.current.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        dragMovedRef.current = true;
+      }
+
+      const maxX = window.innerWidth - dragRef.current.width - 8;
+      const maxY = window.innerHeight - dragRef.current.height - 8;
+      const nextX = Math.max(8, Math.min(maxX, dragRef.current.originX + dx));
+      const nextY = Math.max(8, Math.min(maxY, dragRef.current.originY + dy));
+      setAnchorPosition({ x: nextX, y: nextY });
+    };
+
+    const clearListeners = () => {
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', onPointerUp);
+      window.removeEventListener('touchmove', onPointerMove);
+      window.removeEventListener('touchend', onPointerUp);
+      window.removeEventListener('touchcancel', onPointerUp);
+      dragRef.current = null;
+    };
+
+    const onPointerUp = () => {
+      clearListeners();
+    };
+
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('touchmove', onPointerMove, { passive: false });
+    window.addEventListener('touchend', onPointerUp);
+    window.addEventListener('touchcancel', onPointerUp);
+  }
+
+  function handleLauncherMouseDown(event: ReactMouseEvent<HTMLDivElement>) {
+    beginLauncherDrag(event.clientX, event.clientY);
+  }
+
+  function handleLauncherTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    beginLauncherDrag(touch.clientX, touch.clientY);
+  }
+
+  useEffect(() => {
+    if (!anchorPosition || !launcherRef.current) return;
+
+    const onResize = () => {
+      if (!launcherRef.current) return;
+      const rect = launcherRef.current.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 8;
+      const maxY = window.innerHeight - rect.height - 8;
+      setAnchorPosition((prev) => {
+        if (!prev) return prev;
+        const clampedX = Math.max(8, Math.min(maxX, prev.x));
+        const clampedY = Math.max(8, Math.min(maxY, prev.y));
+        if (clampedX === prev.x && clampedY === prev.y) return prev;
+        return { x: clampedX, y: clampedY };
+      });
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+    };
+  }, [anchorPosition]);
+
   return (
-    <div className="chat-widget-anchor">
+    <div
+      className="chat-widget-anchor"
+      style={
+        !isOpen && anchorPosition
+          ? { left: anchorPosition.x, top: anchorPosition.y, right: 'auto', bottom: 'auto' }
+          : undefined
+      }
+    >
       {!isOpen && (
-        <FloatingButton
-          className="chat-widget-launcher"
-          appearance="primary"
-          dimension="xl"
-          tooltip="Открыть AI чат"
-          onClick={handleToggleOpen}
-          aria-label="Открыть AI чат"
+        <div
+          className="chat-widget-launcher-drag-area"
+          ref={launcherRef}
+          onMouseDown={handleLauncherMouseDown}
+          onTouchStart={handleLauncherTouchStart}
         >
-          <MessageOutlined />
-        </FloatingButton>
+          <FloatingButton
+            className="chat-widget-launcher"
+            appearance="primary"
+            dimension="xl"
+            tooltip="Открыть AI чат"
+            onClick={handleToggleOpen}
+            aria-label="Открыть AI чат"
+          >
+            <MessageOutlined />
+          </FloatingButton>
+        </div>
       )}
 
       {isOpen && (
@@ -556,7 +685,6 @@ export function FloatingChatWidget() {
                         onClick={() => {
                           setActiveChatId(chat.id);
                           setInput('');
-                          setIsHistoryOpen(false);
                           setIsOpen(true);
                         }}
                       >

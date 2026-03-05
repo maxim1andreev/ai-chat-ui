@@ -47,7 +47,7 @@ function formatChatTitle(text: string): string {
 
 function getChatPreview(chat: ChatState): string {
   const lastMessage = chat.messages[chat.messages.length - 1];
-  if (!lastMessage) return 'Пустой чат';
+  if (!lastMessage) return '';
   const prefix = lastMessage.role === 'user' ? 'Вы: ' : 'AI: ';
   const line = `${prefix}${lastMessage.content}`.replace(/\s+/g, ' ').trim();
   return line.length > 56 ? `${line.slice(0, 56)}...` : line;
